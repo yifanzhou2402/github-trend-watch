@@ -101,7 +101,7 @@ with st.sidebar:
         st.success("已检测到 GITHUB_TOKEN")
     else:
         st.info("未设置 GITHUB_TOKEN，匿名限流约 60 次/小时")
-    if st.button("🔄 强制刷新", width="stretch"):
+    if st.button("🔄 强制刷新", use_container_width=True):
         load.clear()
         translate_all.clear()
         translate_topics_all.clear()
