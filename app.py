@@ -4,7 +4,7 @@
 功能:
 - 按时间窗口/语言/条数筛选最近新建的高星项目
 - 按领域分类浏览（AI、Web、工具、数据 等）
-- 一键翻译英文描述为中文
+- 描述和标签可选中文/英文/双语显示
 """
 
 import os
@@ -23,7 +23,7 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 st.set_page_config(page_title="GitHub 热门项目监视器", page_icon="🔥", layout="wide")
 
 st.title("🔍 GitHub 热门项目监视器")
-st.caption("监视最近新创建、涨星最快的开源项目，支持分类浏览 + 中文翻译")
+st.caption("监视最近新创建、涨星最快的开源项目，支持分类浏览 + 中英文切换")
 
 
 @st.cache_data(ttl=3600, show_spinner="正在拉取 GitHub 数据...")
@@ -37,6 +37,32 @@ def load(days, language, per_page, token):
 @st.cache_data(ttl=7200, show_spinner="正在翻译描述...")
 def translate_all(descriptions):
     return translate_descriptions(descriptions)
+
+
+@st.cache_data(ttl=7200, show_spinner="正在翻译标签...")
+def translate_topics_all(topics_list):
+    """批量翻译标签列表，每个标签独立翻译后返回。"""
+    unique_topics = set()
+    for t in topics_list:
+        for tag in str(t).split(", "):
+            tag = tag.strip()
+            if tag:
+                unique_topics.add(tag)
+    translations = {}
+    if unique_topics:
+        results = translate_descriptions(list(unique_topics))
+        for orig, tr in zip(sorted(unique_topics), results):
+            translations[orig] = tr
+    translated_list = []
+    for t in topics_list:
+        parts = []
+        for tag in str(t).split(", "):
+            tag = tag.strip()
+            if not tag:
+                continue
+            parts.append(translations.get(tag, tag))
+        translated_list.append(", ".join(parts))
+    return translated_list
 
 
 # ──────────────────────────────────────
@@ -55,7 +81,21 @@ with st.sidebar:
     per_page = st.slider("展示条数", min_value=10, max_value=100, value=30, step=10)
 
     st.divider()
-    translate_enabled = st.toggle("🌐 翻译描述为中文", value=True)
+    st.subheader("显示语言")
+    desc_lang = st.selectbox(
+        "📝 描述显示",
+        options=["双语", "中文", "英文"],
+        index=0,
+        help="选择项目描述的显示语言",
+    )
+    tag_lang = st.selectbox(
+        "🏷 标签显示",
+        options=["双语", "中文", "英文"],
+        index=2,
+        help="选择标签的显示语言",
+    )
+
+    need_translate = "中文" in (desc_lang, tag_lang) or "双语" in (desc_lang, tag_lang)
 
     if GITHUB_TOKEN:
         st.success("已检测到 GITHUB_TOKEN")
@@ -64,6 +104,7 @@ with st.sidebar:
     if st.button("🔄 强制刷新", width="stretch"):
         load.clear()
         translate_all.clear()
+        translate_topics_all.clear()
 
 # ──────────────────────────────────────
 # 数据加载
@@ -78,13 +119,42 @@ if df.empty:
     st.warning("没有找到符合条件的项目，试试放宽时间窗口或清除语言限制。")
     st.stop()
 
-# 翻译
-if translate_enabled and not df.empty:
-    descriptions = df["description"].tolist()
-    translations = translate_all(descriptions)
-    df["description_cn"] = translations
+# 翻译（按需触发）
+if need_translate:
+    if "中文" in desc_lang or "双语" in desc_lang:
+        df["description_cn"] = translate_all(df["description"].tolist())
+    else:
+        df["description_cn"] = ""
+    if "中文" in tag_lang or "双语" in tag_lang:
+        df["topics_cn"] = translate_topics_all(df["topics"].tolist())
+    else:
+        df["topics_cn"] = ""
 else:
     df["description_cn"] = ""
+    df["topics_cn"] = ""
+
+
+def show_desc(row):
+    """根据用户选择的语言偏好返回描述文本。"""
+    desc_en = row["description"]
+    desc_cn = row["description_cn"]
+    if desc_lang == "中文" and desc_cn:
+        return desc_cn
+    if desc_lang == "双语" and desc_cn and desc_cn != desc_en:
+        return f"{desc_cn}\n\n_{desc_en}_"
+    return desc_en
+
+
+def show_topics(row):
+    """根据用户选择的语言偏好返回标签文本。"""
+    topics_en = row["topics"]
+    topics_cn = row["topics_cn"]
+    if tag_lang == "中文" and topics_cn:
+        return topics_cn
+    if tag_lang == "双语" and topics_cn and topics_cn != topics_en:
+        return f"{topics_cn} / {topics_en}"
+    return topics_en
+
 
 # ──────────────────────────────────────
 # 顶部统计
@@ -101,22 +171,13 @@ c4.metric("最热分类", top_cat)
 # ──────────────────────────────────────
 tab_all, tab_cat, tab_lang = st.tabs(["📋 全部项目", "📂 按分类", "💻 按语言"])
 
-
-def show_desc(row):
-    """展示描述：有翻译时同时显示中英文。"""
-    desc_en = row["description"]
-    desc_cn = row["description_cn"]
-    if desc_cn and desc_cn != desc_en:
-        return f"{desc_cn}\n\n_{desc_en}_"
-    return desc_en
-
-
 # --- Tab 1: 全部项目 ---
 with tab_all:
     display_df = df.copy()
     display_df["描述"] = display_df.apply(show_desc, axis=1)
+    display_df["标签"] = display_df.apply(show_topics, axis=1)
     st.dataframe(
-        display_df[["name", "stars", "forks", "language", "category", "created", "url", "描述", "topics"]],
+        display_df[["name", "stars", "forks", "language", "category", "created", "url", "描述", "标签"]],
         column_config={
             "name": st.column_config.TextColumn("项目", width="medium"),
             "url": st.column_config.LinkColumn("链接", width="small"),
@@ -125,7 +186,7 @@ with tab_all:
             "language": st.column_config.TextColumn("语言", width="small"),
             "category": st.column_config.TextColumn("分类", width="small"),
             "描述": st.column_config.TextColumn("描述", width="large"),
-            "topics": st.column_config.TextColumn("标签", width="medium"),
+            "标签": st.column_config.TextColumn("标签", width="medium"),
         },
         hide_index=True,
         use_container_width=True,
@@ -146,8 +207,9 @@ with tab_cat:
                 desc_text = show_desc(row)
                 if desc_text:
                     st.markdown(desc_text)
-                if row["topics"]:
-                    st.caption(f"🏷 {row['topics']}")
+                topics_text = show_topics(row)
+                if topics_text:
+                    st.caption(f"🏷 {topics_text}")
                 st.divider()
 
 # --- Tab 3: 按语言 ---
@@ -164,4 +226,7 @@ with tab_lang:
                 desc_text = show_desc(row)
                 if desc_text:
                     st.markdown(desc_text)
+                topics_text = show_topics(row)
+                if topics_text:
+                    st.caption(f"🏷 {topics_text}")
                 st.divider()
