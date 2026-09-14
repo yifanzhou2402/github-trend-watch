@@ -61,17 +61,7 @@ TOPIC_CATEGORY_MAP = {
 
 
 def fetch_trending_repos(days=7, language=None, per_page=30, token=None):
-    """抓取最近 `days` 天内新建、按 star 数降序的仓库。
-
-    参数:
-        days: 往回看的窗口天数，对应搜索条件 created:>{date}
-        language: 可选，限定主要语言（如 "python"、"go"）
-        per_page: 返回条数（GitHub 上限 100）
-        token: GitHub Personal Access Token；不传则匿名，限流约 60 次/小时
-
-    返回:
-        list[dict]: Search API 返回的 items 原始仓库信息
-    """
+    """抓取最近 `days` 天内新建、按 star 数降序的仓库。"""
     since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     query = f"created:>{since}"
     if language:
@@ -96,11 +86,7 @@ def fetch_trending_repos(days=7, language=None, per_page=30, token=None):
 
 
 def categorize_by_topic(topics):
-    """根据仓库的 topics 列表推断中文分类名。
-
-    返回:
-        str: 分类名，匹配不上时返回 "其他"
-    """
+    """根据仓库的 topics 列表推断中文分类名。"""
     for topic in topics:
         t = topic.lower()
         if t in TOPIC_CATEGORY_MAP:
@@ -125,32 +111,36 @@ def repo_to_row(repo):
     }
 
 
+GOOGLE_TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single"
+
+
+def _translate_single(text, source="en", target="zh-CN"):
+    """用 requests 直接调 Google Translate 免费接口翻译单条文本。"""
+    if not text:
+        return ""
+    params = {
+        "client": "gtx",
+        "sl": source,
+        "tl": target,
+        "dt": "t",
+        "q": text,
+    }
+    resp = requests.get(GOOGLE_TRANSLATE_URL, params=params, timeout=10)
+    resp.raise_for_status()
+    data = resp.json()
+    return "".join(part[0] for part in data[0] if part[0])
+
+
 def translate_descriptions(descriptions):
-    """批量把英文描述翻译成中文。
-
-    使用 deep-translator 封装的 Google Translate 免费接口。
-    单条翻译失败时回退到原文，不影响整体流程。
-
-    参数:
-        descriptions: list[str]，英文描述列表
-
-    返回:
-        list[str]，中文翻译列表（翻译失败的位置为原文）
-    """
-    try:
-        from deep_translator import GoogleTranslator
-    except ImportError:
-        return list(descriptions)
-
-    translator = GoogleTranslator(source="en", target="zh-CN")
+    """批量把英文描述翻译成中文。直接调 Google Translate 免费接口（无需第三方包）。"""
     results = []
     for desc in descriptions:
         if not desc:
             results.append("")
             continue
         try:
-            results.append(translator.translate(desc))
-            time.sleep(0.3)  # 避免触发免费接口限流
+            results.append(_translate_single(desc))
+            time.sleep(0.3)
         except Exception:
             results.append(desc)
     return results
